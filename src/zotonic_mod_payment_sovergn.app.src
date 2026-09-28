@@ -1,0 +1,15 @@
+{application, zotonic_mod_payment_sovergn, [
+    {description, "Zotonic payment service provider module for Sovergn."},
+    {vsn, git},
+    {registered, []},
+    {applications, [
+        kernel, stdlib,
+        crypto, inets, ssl,
+        zotonic_core
+    ]},
+    {env, []},
+    {modules, []},
+    {doc, "doc"},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+]}.

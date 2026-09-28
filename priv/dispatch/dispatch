@@ -1,0 +1,3 @@
+[
+    {sovergn_payment_webhook, [ "sovergn", "webhook" ], controller_sovergn_webhook, []}
+].

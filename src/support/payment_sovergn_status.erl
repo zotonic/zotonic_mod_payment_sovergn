@@ -1,8 +1,8 @@
 %% @copyright 2026
 %% @doc Mapping from Sovergn states to mod_payment states.
 %%
-%% The status-endpoint vocabulary is still provisional. The webhook event and
-%% status combinations are confirmed by Sovergn and must match exactly.
+%% The status-endpoint vocabulary and webhook event/status combinations follow
+%% the Sovergn merchant API contract and must match exactly.
 %% @end
 
 -module(payment_sovergn_status).

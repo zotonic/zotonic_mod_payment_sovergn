@@ -53,13 +53,14 @@ validate_checkout_response_test() ->
         <<"merchantReference">> => <<"payment-1">>,
         <<"amount">> => 2500,
         <<"currency">> => <<"EUR">>,
-        <<"environment">> => <<"test">>
+        <<"environment">> => <<"test">>,
+        <<"paymentPosture">> => <<"non_aop">>
     },
     Response = Request#{
         <<"checkoutSessionRef">> => <<"chk_test">>,
-        <<"checkoutUrl">> => <<"https://checkout.sovergn.invalid/checkout/chk_test">>,
+        <<"checkoutUrl">> => <<"https://checkout.sovergnllc.com/checkout/chk_test">>,
         <<"checkoutMode">> => <<"hosted">>,
-        <<"decision">> => <<"ALLOW">>,
+        <<"decision">> => <<"NON_AOP">>,
         <<"outcome">> => <<"checkout_ready">>,
         <<"providerBlind">> => true,
         <<"idempotencyStatus">> => <<"created">>
@@ -69,4 +70,14 @@ validate_checkout_response_test() ->
         {error, invalid_checkout_response},
         payment_sovergn_api:validate_checkout_response(
             Response#{<<"checkoutUrl">> => <<"https://evil.example/checkout/chk_test">>},
+            Request)),
+    ?assertEqual(
+        {error, invalid_checkout_response},
+        payment_sovergn_api:validate_checkout_response(
+            Response#{<<"decision">> => <<"ALLOW">>},
+            Request)),
+    ?assertEqual(
+        {error, invalid_checkout_response},
+        payment_sovergn_api:validate_checkout_response(
+            maps:remove(<<"paymentPosture">>, Response),
             Request)).

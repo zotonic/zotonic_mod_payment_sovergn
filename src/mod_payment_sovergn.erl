@@ -17,7 +17,7 @@
         key => environment,
         type => binary,
         default => <<"test">>,
-        description => "Sovergn environment: test or live"
+        description => "Sovergn environment: test or live; must match the OAuth client and webhook signing secret"
     },
     #{
         key => merchant_token,
@@ -29,19 +29,19 @@
         key => oauth_client_id,
         type => binary,
         default => <<>>,
-        description => "Sovergn OAuth client id"
+        description => "Sovergn OAuth 2.0 client id"
     },
     #{
         key => oauth_client_secret,
         type => binary,
         default => <<>>,
-        description => "Sovergn OAuth client secret"
+        description => "Sovergn OAuth client secret, shown only once when created or rotated"
     },
     #{
         key => webhook_signing_secret,
         type => binary,
         default => <<>>,
-        description => "Sovergn webhook HMAC signing secret"
+        description => "Sovergn webhook HMAC signing secret; separate from the OAuth client secret"
     }
 ]).
 

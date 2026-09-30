@@ -17,15 +17,17 @@
 -include_lib("kernel/include/logger.hrl").
 -include_lib("zotonic_mod_payment/include/payment.hrl").
 
-%% TODO(sovergn): Replace these placeholders after Sovergn confirms the exact
-%% production API host and hosted-checkout origin/path.
--define(API_ORIGIN, <<"https://api.sovergn.invalid">>).
--define(CHECKOUT_ORIGIN, <<"https://checkout.sovergn.invalid">>).
+%% The beta API serves its contract and endpoints from the same origin. Replace
+%% API_ORIGIN when Sovergn supplies the production API origin.
+-define(API_ORIGIN, <<"https://beta.sovergnllc.com">>).
+-define(CHECKOUT_ORIGIN, <<"https://checkout.sovergnllc.com">>).
 -define(CHECKOUT_PATH_PREFIX, <<"/checkout/">>).
 
 -define(TIMEOUT, 20000).
 -define(SCOPE_CHECKOUT_CREATE, <<"checkout_sessions:create">>).
 -define(SCOPE_PAYMENT_STATUS, <<"payment_status:read">>).
+-define(PAYMENT_POSTURE, <<"non_aop">>).
+-define(CHECKOUT_DECISION, <<"NON_AOP">>).
 
 -spec create(integer(), z:context()) ->
     {ok, #payment_psp_handler{}} | {error, term()}.
@@ -71,6 +73,7 @@ checkout_request(Payment, Context) ->
             IdempotencyKey = idempotency_key(MerchantReference),
             Request0 = #{
                 <<"merchantToken">> => MerchantToken,
+                <<"paymentPosture">> => ?PAYMENT_POSTURE,
                 <<"amount">> => Amount,
                 <<"currency">> => Currency,
                 <<"environment">> => Environment,
@@ -119,7 +122,8 @@ validate_checkout_response(Response, Request) when is_map(Response), is_map(Requ
         {<<"merchantReference">>, <<"merchantReference">>},
         {<<"amount">>, <<"amount">>},
         {<<"currency">>, <<"currency">>},
-        {<<"environment">>, <<"environment">>}
+        {<<"environment">>, <<"environment">>},
+        {<<"paymentPosture">>, <<"paymentPosture">>}
     ],
     IsMatch = lists:all(
         fun({ResponseKey, RequestKey}) ->
@@ -129,7 +133,7 @@ validate_checkout_response(Response, Request) when is_map(Response), is_map(Requ
     CheckoutUrl = maps:get(<<"checkoutUrl">>, Response, undefined),
     CheckoutSessionRef = maps:get(<<"checkoutSessionRef">>, Response, undefined),
     IsReady = maps:get(<<"outcome">>, Response, undefined) =:= <<"checkout_ready">>
-        andalso maps:get(<<"decision">>, Response, undefined) =:= <<"ALLOW">>
+        andalso maps:get(<<"decision">>, Response, undefined) =:= ?CHECKOUT_DECISION
         andalso maps:get(<<"checkoutMode">>, Response, undefined) =:= <<"hosted">>
         andalso maps:get(<<"providerBlind">>, Response, undefined) =:= true
         andalso is_binary(CheckoutSessionRef)
@@ -155,6 +159,8 @@ checkout_url_allowed(_) ->
 
 checkout_data(Response) ->
     maps:with([
+        <<"surfaceId">>,
+        <<"contractVersion">>,
         <<"checkoutSessionRef">>,
         <<"checkoutUrl">>,
         <<"checkoutMode">>,
@@ -162,11 +168,15 @@ checkout_data(Response) ->
         <<"merchantToken">>,
         <<"amount">>,
         <<"currency">>,
+        <<"paymentIntentRef">>,
+        <<"policyVersion">>,
+        <<"paymentPosture">>,
         <<"decision">>,
         <<"outcome">>,
         <<"providerBlind">>,
         <<"captureMode">>,
         <<"environment">>,
+        <<"testMode">>,
         <<"expiresAt">>,
         <<"idempotencyStatus">>
     ], Response).
@@ -268,14 +278,29 @@ first_defined([Value | _]) -> Value;
 first_defined([]) -> undefined.
 
 api_json(Method, Path, Payload, Scope, ExtraOptions, Context) ->
+    api_json(Method, Path, Payload, Scope, ExtraOptions, true, Context).
+
+api_json(Method, Path, Payload, Scope, ExtraOptions, RetryUnauthorized, Context) ->
     case access_token(Scope, Context) of
-        {ok, AccessToken} ->
+        {ok, AccessToken, CacheKey} ->
             Authorization = <<"Bearer ", AccessToken/binary>>,
-            Options = [{authorization, Authorization}, {timeout, ?TIMEOUT} | ExtraOptions],
+            Options = [
+                {authorization, Authorization},
+                {autoredirect, false},
+                {timeout, ?TIMEOUT}
+                | ExtraOptions
+            ],
             Url = <<?API_ORIGIN/binary, Path/binary>>,
-            case Method of
+            Result = case Method of
                 get -> z_fetch:fetch_json(Url, Options, Context);
                 post -> z_fetch:fetch_json(post, Url, Payload, Options, Context)
+            end,
+            case Result of
+                {error, {401, _, _, _, _}} when RetryUnauthorized ->
+                    ok = z_depcache:flush(CacheKey, Context),
+                    api_json(Method, Path, Payload, Scope, ExtraOptions, false, Context);
+                _ ->
+                    Result
             end;
         {error, _} = Error ->
             Error
@@ -288,10 +313,14 @@ access_token(Scope, Context) ->
             CacheKey = {?MODULE, access_token, Scope, ClientId, CredentialVersion},
             case z_depcache:get(CacheKey, Context) of
                 {ok, Token} when is_binary(Token), Token =/= <<>> ->
-                    {ok, Token};
+                    {ok, Token, CacheKey};
                 _ ->
-                    fetch_access_token(
+                    case fetch_access_token(
                         CacheKey, Scope, ClientId, ClientSecret, Context)
+                    of
+                        {ok, Token} -> {ok, Token, CacheKey};
+                        {error, _} = Error -> Error
+                    end
             end;
         {error, _} = Error ->
             Error
@@ -306,6 +335,7 @@ fetch_access_token(CacheKey, Scope, ClientId, ClientSecret, Context) ->
     },
     Options = [
         {authorization, Authorization},
+        {autoredirect, false},
         {content_type, <<"application/x-www-form-urlencoded">>},
         {timeout, ?TIMEOUT}
     ],

@@ -39,25 +39,68 @@ is_authorized(Context) ->
 
 process(<<"POST">>, _AcceptedCT, _ProvidedCT, Context) ->
     Body = z_context:get(sovergn_webhook_body, Context),
-    try z_json:decode(Body) of
-        Payload when is_map(Payload) ->
-            case handle(Payload, Context) of
-                ok -> {true, Context};
-                {error, payload} -> {{halt, 400}, Context};
-                {error, _} -> {{halt, 500}, Context}
-            end
+    %% Keep JSON decoding separate: processing failures must be retried as 500s.
+    Decoded = try z_json:decode(Body) of
+        Payload when is_map(Payload) -> {ok, Payload};
+        _ -> {error, json_object}
     catch
-        error:badarg:Stack ->
-            ?LOG_WARNING(#{
-                in => zotonic_mod_payment_sovergn,
-                text => <<"Invalid JSON in Sovergn webhook">>,
-                result => error,
-                reason => json,
-                stack => Stack
-            }),
-            {{halt, 400}, Context}
+        error:_ -> {error, json}
+    end,
+    case Decoded of
+        {ok, Data} -> process_payload(Data, Context);
+        {error, Reason} -> reject(400, Reason, #{}, Context)
     end.
 
+process_payload(Payload, Context) ->
+    try handle(Payload, Context) of
+        ok -> {true, Context};
+        {error, {payload, Reason}} -> reject(400, Reason, Payload, Context);
+        {error, Reason} -> reject(500, Reason, Payload, Context)
+    catch
+        Class:Reason ->
+            %% Never log the raw body, credentials or exception arguments.
+            reject(500, {processing_exception, Class, exception_reason(Reason)}, Payload, Context)
+    end.
+
+exception_reason(Reason) when is_atom(Reason) -> Reason;
+exception_reason(_) -> processing_failed.
+
+reject(Code, Reason, Payload, Context) ->
+    Report = #{
+        in => zotonic_mod_payment_sovergn,
+        text => <<"Could not process Sovergn webhook">>,
+        result => error,
+        reason => Reason,
+        http_status => Code,
+        event_id => z_context:get(sovergn_webhook_event_id, Context),
+        event_type => maps:get(<<"event_type">>, Payload, undefined),
+        site => z_context:site(Context)
+    },
+    case Code of
+        400 -> ?LOG_WARNING(Report);
+        500 -> ?LOG_ERROR(Report)
+    end,
+    {{halt, Code}, Context}.
+
+%% Sovergn's delivery tests have a synthetic capsule and no local payment.
+%% Authorization has already verified the signature over the complete body.
+handle(#{
+        <<"event_id">> := EventId,
+        <<"capsule_id">> := <<"test_cap_", Suffix/binary>>
+    }, Context) when is_binary(EventId), Suffix =/= <<>> ->
+    case EventId =:= z_context:get(sovergn_webhook_event_id, Context) of
+        true ->
+            ?LOG_INFO(#{
+                in => zotonic_mod_payment_sovergn,
+                text => <<"Received Sovergn webhook delivery test">>,
+                result => ok,
+                event_id => EventId,
+                site => z_context:site(Context)
+            }),
+            ok;
+        false ->
+            {error, {payload, event_id_mismatch}}
+    end;
 handle(#{
         <<"event_id">> := EventId,
         <<"event_type">> := EventType,
@@ -73,10 +116,15 @@ handle(#{
                 MerchantReference, EventId, EventType, OccurredAt,
                 Amount, Currency, SovergnStatus, Context);
         false ->
-            {error, payload}
+            {error, {payload, event_id_mismatch}}
     end;
-handle(_Payload, _Context) ->
-    {error, payload}.
+handle(Payload, _Context) ->
+    Required = [<<"event_id">>, <<"event_type">>, <<"occurred_at">>,
+        <<"merchantReference">>, <<"amount">>, <<"currency">>, <<"status">>],
+    case [Key || Key <- Required, not maps:is_key(Key, Payload)] of
+        [] -> {error, {payload, invalid_field_type}};
+        Missing -> {error, {payload, {missing_fields, Missing}}}
+    end.
 
 handle_payment(MerchantReference, EventId, EventType, OccurredAt,
                Amount, Currency, SovergnStatus, Context) ->

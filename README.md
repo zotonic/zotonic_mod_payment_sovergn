@@ -59,3 +59,14 @@ Confirmed webhook combinations:
 | `settlement.paid` | `paid` | Record only |
 
 Webhook endpoint: `/sovergn/webhook`.
+
+Signed delivery-test events with a `test_cap_...` capsule ID are acknowledged
+without a payment lookup; Sovergn omits `merchantReference` from these events.
+Their body event ID must still match the signed header event ID. Receipt is
+logged at info level as `Received Sovergn webhook delivery test`.
+
+Rejected payloads are logged at warning level and payment-processing failures
+at error level as `Could not process Sovergn webhook`. These structured logs
+include the site, event ID, event type, HTTP status and failure reason (including
+missing required fields), and use Zotonic's normal logging to `console.log`.
+Raw request bodies, signatures and secrets are not logged.

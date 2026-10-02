@@ -20,7 +20,11 @@
 %% The beta API serves its contract and endpoints from the same origin. Replace
 %% API_ORIGIN when Sovergn supplies the production API origin.
 -define(API_ORIGIN, <<"https://beta.sovergnllc.com">>).
--define(CHECKOUT_ORIGIN, <<"https://checkout.sovergnllc.com">>).
+%% The beta API also returns hosted checkout URLs on its own origin.
+-define(CHECKOUT_ORIGINS, [
+    <<"https://checkout.sovergnllc.com">>,
+    <<"https://beta.sovergnllc.com">>
+]).
 -define(CHECKOUT_PATH_PREFIX, <<"/checkout/">>).
 
 -define(TIMEOUT, 20000).
@@ -149,7 +153,7 @@ checkout_response_errors(Response, Request) when is_map(Response), is_map(Reques
         {<<"idempotencyStatus">>, [<<"created">>, <<"replayed">>], lists:member(
             maps:get(<<"idempotencyStatus">>, Response, undefined),
             [<<"created">>, <<"replayed">>])},
-        {<<"checkoutUrl">>, <<?CHECKOUT_ORIGIN/binary, ?CHECKOUT_PATH_PREFIX/binary>>,
+        {<<"checkoutUrl">>, checkout_url_prefixes(),
             checkout_url_allowed(CheckoutUrl)}
     ],
     Mismatches ++ [validation_error(Key, Value, Response)
@@ -202,13 +206,16 @@ diagnostic_value(_Key, [<<"created">>, <<"replayed">>] = Value) -> Value;
 diagnostic_value(_Key, _Value) -> invalid_type.
 
 checkout_url_allowed(CheckoutUrl) when is_binary(CheckoutUrl) ->
-    Prefix = <<?CHECKOUT_ORIGIN/binary, ?CHECKOUT_PATH_PREFIX/binary>>,
-    case binary:match(CheckoutUrl, Prefix) of
-        {0, _} -> true;
-        _ -> false
-    end;
+    lists:any(
+        fun(Prefix) ->
+            binary:match(CheckoutUrl, Prefix) =:= {0, byte_size(Prefix)}
+        end,
+        checkout_url_prefixes());
 checkout_url_allowed(_) ->
     false.
+
+checkout_url_prefixes() ->
+    [<<Origin/binary, ?CHECKOUT_PATH_PREFIX/binary>> || Origin <- ?CHECKOUT_ORIGINS].
 
 checkout_data(Response) ->
     maps:with([

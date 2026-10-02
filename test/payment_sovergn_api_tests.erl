@@ -66,6 +66,23 @@ validate_checkout_response_test() ->
         <<"idempotencyStatus">> => <<"created">>
     },
     ?assertEqual(ok, payment_sovergn_api:validate_checkout_response(Response, Request)),
+    ?assertEqual(ok, payment_sovergn_api:validate_checkout_response(
+        Response#{<<"checkoutUrl">> => <<"https://beta.sovergnllc.com/checkout/chk_test">>},
+        Request)),
+    lists:foreach(
+        fun(Url) ->
+            ?assertEqual({error, invalid_checkout_response},
+                payment_sovergn_api:validate_checkout_response(
+                    Response#{<<"checkoutUrl">> => Url}, Request))
+        end,
+        [
+            <<"http://beta.sovergnllc.com/checkout/chk_test">>,
+            <<"https://beta.sovergnllc.com.evil.example/checkout/chk_test">>,
+            <<"https://beta.sovergnllc.com@evil.example/checkout/chk_test">>,
+            <<"https://beta.sovergnllc.com:8443/checkout/chk_test">>,
+            <<"https://beta.sovergnllc.com/other/chk_test">>,
+            <<"https://beta.sovergnllc.com/checkout-evil/chk_test">>
+        ]),
     ?assertEqual(
         {error, invalid_checkout_response},
         payment_sovergn_api:validate_checkout_response(

@@ -11,7 +11,8 @@ Before enabling the module:
 
 1. The module currently targets the beta API at `https://beta.sovergnllc.com`
    and accepts payer-entry URLs below
-   `https://checkout.sovergnllc.com/checkout/`. Replace `API_ORIGIN` when
+   `https://checkout.sovergnllc.com/checkout/` and
+   `https://beta.sovergnllc.com/checkout/`. Replace `API_ORIGIN` when
    Sovergn supplies the production API origin.
 2. Create an OAuth 2.0 client for the selected environment. Grant only
    `checkout_sessions:create` and `payment_status:read`. Save the client secret

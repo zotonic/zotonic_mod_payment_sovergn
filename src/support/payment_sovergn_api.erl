@@ -111,42 +111,95 @@ checkout_result(#{ <<"id">> := PaymentId } = Payment, Request, Response, Context
                 redirect_uri = CheckoutUrl
             }};
         {error, Reason} = Error ->
-            log_api_error(maps:get(<<"id">>, Payment), <<"validate">>, Reason, Context),
+            log_api_error(PaymentId, <<"validate">>, Reason,
+                checkout_response_errors(Response, Request), Context),
             Error
     end.
 
 -spec validate_checkout_response(map(), map()) -> ok | {error, term()}.
 validate_checkout_response(Response, Request) when is_map(Response), is_map(Request) ->
-    RequiredMatches = [
-        {<<"merchantToken">>, <<"merchantToken">>},
-        {<<"merchantReference">>, <<"merchantReference">>},
-        {<<"amount">>, <<"amount">>},
-        {<<"currency">>, <<"currency">>},
-        {<<"environment">>, <<"environment">>},
-        {<<"paymentPosture">>, <<"paymentPosture">>}
-    ],
-    IsMatch = lists:all(
-        fun({ResponseKey, RequestKey}) ->
-            maps:get(ResponseKey, Response, undefined) =:= maps:get(RequestKey, Request, undefined)
-        end,
-        RequiredMatches),
-    CheckoutUrl = maps:get(<<"checkoutUrl">>, Response, undefined),
-    CheckoutSessionRef = maps:get(<<"checkoutSessionRef">>, Response, undefined),
-    IsReady = maps:get(<<"outcome">>, Response, undefined) =:= <<"checkout_ready">>
-        andalso maps:get(<<"decision">>, Response, undefined) =:= ?CHECKOUT_DECISION
-        andalso maps:get(<<"checkoutMode">>, Response, undefined) =:= <<"hosted">>
-        andalso maps:get(<<"providerBlind">>, Response, undefined) =:= true
-        andalso is_binary(CheckoutSessionRef)
-        andalso CheckoutSessionRef =/= <<>>
-        andalso lists:member(
-            maps:get(<<"idempotencyStatus">>, Response, undefined),
-            [<<"created">>, <<"replayed">>]),
-    case IsMatch andalso IsReady andalso checkout_url_allowed(CheckoutUrl) of
-        true -> ok;
-        false -> {error, invalid_checkout_response}
+    case checkout_response_errors(Response, Request) of
+        [] -> ok;
+        _ -> {error, invalid_checkout_response}
     end;
 validate_checkout_response(_Response, _Request) ->
     {error, invalid_checkout_response}.
+
+%% Use the same checks for validation and diagnostics. Do not log raw responses:
+%% merchant tokens, session references and checkout URLs can contain secrets.
+checkout_response_errors(Response, Request) when is_map(Response), is_map(Request) ->
+    Matches = [{Key, maps:get(Key, Request, undefined)} || Key <- [
+        <<"merchantToken">>, <<"merchantReference">>, <<"amount">>,
+        <<"currency">>, <<"environment">>, <<"paymentPosture">>
+    ]],
+    Expected = Matches ++ [
+        {<<"outcome">>, <<"checkout_ready">>},
+        {<<"decision">>, ?CHECKOUT_DECISION},
+        {<<"checkoutMode">>, <<"hosted">>},
+        {<<"providerBlind">>, true}
+    ],
+    Mismatches = [validation_error(Key, Value, Response)
+        || {Key, Value} <- Expected,
+           maps:get(Key, Response, undefined) =/= Value],
+    CheckoutUrl = maps:get(<<"checkoutUrl">>, Response, undefined),
+    CheckoutSessionRef = maps:get(<<"checkoutSessionRef">>, Response, undefined),
+    Checks = [
+        {<<"checkoutSessionRef">>, nonempty_binary,
+            is_binary(CheckoutSessionRef) andalso CheckoutSessionRef =/= <<>>},
+        {<<"idempotencyStatus">>, [<<"created">>, <<"replayed">>], lists:member(
+            maps:get(<<"idempotencyStatus">>, Response, undefined),
+            [<<"created">>, <<"replayed">>])},
+        {<<"checkoutUrl">>, <<?CHECKOUT_ORIGIN/binary, ?CHECKOUT_PATH_PREFIX/binary>>,
+            checkout_url_allowed(CheckoutUrl)}
+    ],
+    Mismatches ++ [validation_error(Key, Value, Response)
+        || {Key, Value, false} <- Checks];
+checkout_response_errors(_Response, _Request) ->
+    [#{reason => expected_json_object}].
+
+validation_error(Key, Expected, Response) ->
+    Actual = maps:get(Key, Response, undefined),
+    #{
+        field => Key,
+        reason => case maps:is_key(Key, Response) of
+            false -> missing;
+            true -> unexpected_value
+        end,
+        expected => case Key of
+            <<"merchantToken">> -> matches_request;
+            <<"merchantReference">> -> matches_request;
+            _ -> Expected
+        end,
+        actual => diagnostic_value(Key, Actual)
+    }.
+
+diagnostic_value(_Key, undefined) -> missing;
+diagnostic_value(_Key, null) -> null;
+diagnostic_value(_Key, <<>>) -> empty;
+diagnostic_value(Key, Value) when Key =:= <<"merchantToken">>;
+                                 Key =:= <<"merchantReference">>;
+                                 Key =:= <<"checkoutSessionRef">> ->
+    case is_binary(Value) of
+        true -> redacted;
+        false -> invalid_type
+    end;
+diagnostic_value(<<"checkoutUrl">>, Value) when is_binary(Value) ->
+    try uri_string:parse(Value) of
+        Parsed when is_map(Parsed) ->
+            %% Omit userinfo, path, query and fragment, which can carry tokens.
+            Path = maps:get(path, Parsed, <<>>),
+            (maps:with([scheme, host, port], Parsed))#{
+                expected_path_prefix => binary:match(Path, ?CHECKOUT_PATH_PREFIX)
+                    =:= {0, byte_size(?CHECKOUT_PATH_PREFIX)}
+            };
+        _ -> invalid_url
+    catch _:_ -> invalid_url
+    end;
+diagnostic_value(_Key, Value) when is_binary(Value) ->
+    z_string:truncatechars(Value, 120);
+diagnostic_value(_Key, Value) when is_number(Value); is_atom(Value) -> Value;
+diagnostic_value(_Key, [<<"created">>, <<"replayed">>] = Value) -> Value;
+diagnostic_value(_Key, _Value) -> invalid_type.
 
 checkout_url_allowed(CheckoutUrl) when is_binary(CheckoutUrl) ->
     Prefix = <<?CHECKOUT_ORIGIN/binary, ?CHECKOUT_PATH_PREFIX/binary>>,
@@ -428,13 +481,18 @@ idempotency_key(MerchantReference) when is_binary(MerchantReference) ->
     z_string:to_lower(z_utils:hex_encode(Digest)).
 
 log_api_error(PaymentId, Operation, Reason, Context) ->
+    log_api_error(PaymentId, Operation, Reason, [], Context).
+
+log_api_error(PaymentId, Operation, Reason, ValidationErrors, Context) ->
     ?LOG_ERROR(#{
         in => zotonic_mod_payment_sovergn,
         text => <<"Sovergn API operation failed">>,
         result => error,
         reason => Reason,
         operation => Operation,
-        payment_id => PaymentId
+        payment_id => PaymentId,
+        site => z_context:site(Context),
+        validation_errors => ValidationErrors
     }),
     m_payment_log:log(
         PaymentId,
@@ -443,6 +501,38 @@ log_api_error(PaymentId, Operation, Reason, Context) ->
             <<"psp_module">> => mod_payment_sovergn,
             <<"description">> => <<"Sovergn API operation failed">>,
             <<"operation">> => Operation,
-            <<"reason">> => z_convert:to_binary(io_lib:format("~p", [Reason]))
+            <<"reason">> => z_convert:to_binary(io_lib:format("~p", [Reason])),
+            <<"validation_errors">> => ValidationErrors
         },
         Context).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+checkout_diagnostics_test() ->
+    Errors = checkout_response_errors(#{<<"providerBlind">> => false}, #{}),
+    ?assert(lists:member(#{field => <<"outcome">>, reason => missing,
+        expected => <<"checkout_ready">>, actual => missing}, Errors)),
+    ?assert(lists:member(#{field => <<"providerBlind">>, reason => unexpected_value,
+        expected => true, actual => false}, Errors)).
+
+checkout_diagnostics_redaction_test() ->
+    Secret = <<"secret-must-not-be-logged">>,
+    Request = #{<<"merchantToken">> => Secret, <<"merchantReference">> => Secret},
+    Response = #{
+        <<"merchantToken">> => <<"different-secret">>,
+        <<"merchantReference">> => <<"different-reference">>,
+        <<"checkoutUrl">> => <<"https://unexpected.example/", Secret/binary, "?token=", Secret/binary>>,
+        <<"access_token">> => Secret
+    },
+    Errors = checkout_response_errors(Response, Request),
+    Logged = iolist_to_binary(io_lib:format("~p", [Errors])),
+    ?assertEqual(nomatch, binary:match(Logged, Secret)),
+    ?assertEqual(nomatch, binary:match(Logged, <<"different-secret">>)),
+    ?assertEqual(nomatch, binary:match(Logged, <<"different-reference">>)),
+    [UrlError] = [E || #{field := <<"checkoutUrl">>} = E <- Errors],
+    ?assertMatch(#{actual := #{host := <<"unexpected.example">>,
+        expected_path_prefix := false}}, UrlError),
+    ?assertEqual([#{reason => expected_json_object}], checkout_response_errors([], Request)).
+
+-endif.

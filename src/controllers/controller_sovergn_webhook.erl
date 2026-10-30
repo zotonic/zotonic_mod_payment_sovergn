@@ -2,7 +2,47 @@
 %% @doc Verify and process Sovergn webhook events.
 %% @end
 
+%% Copyright 2026
+%%
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
+
 -module(controller_sovergn_webhook).
+-moduledoc(#{
+    zotonic_keywords => [
+        "reference", "backend_developer", "integrator", "controller",
+        "payments", "api_and_integration", "security", "send_and_receive"
+    ]
+}).
+-moduledoc("
+Handle Sovergn checkout callbacks.
+
+Accept POST events at `/sovergn/webhook`. Verify the HMAC over the original
+body, signature version, timestamp and event ID using `webhook_signing_secret`.
+Decoded events must match the signed event identity and an existing payment's
+correlation data. Payment and settlement events are normalized before local status
+updates. Delivery tests are acknowledged; processing failures return retryable 500
+responses. This endpoint does not import arbitrary unknown payments.
+
+Generate the endpoint through its dispatch rule, for example:
+
+```django
+{% url sovergn_payment_webhook %}
+```
+
+This provider-facing endpoint uses the verification described above rather than
+an administrator login.
+").
+
 
 -export([
     allowed_methods/1,
@@ -163,14 +203,6 @@ webhook_matches_payment(_EventType, Payment, Amount, Currency) ->
 apply_action({set, Status}, Payment, OccurredAt, Context) ->
     Date = occurred_at(OccurredAt),
     mod_payment:set_payment_status(maps:get(<<"id">>, Payment), Status, Date, Context);
-apply_action(sync, #{ <<"psp_external_id">> := CheckoutSessionRef }, _OccurredAt, Context)
-    when is_binary(CheckoutSessionRef), CheckoutSessionRef =/= <<>> ->
-    case payment_sovergn_api:sync(CheckoutSessionRef, Context) of
-        {ok, _} -> ok;
-        {error, _} = Error -> Error
-    end;
-apply_action(sync, _Payment, _OccurredAt, _Context) ->
-    {error, checkout_session_ref};
 apply_action(ignore, _Payment, _OccurredAt, _Context) ->
     ok;
 apply_action({error, _} = Error, _Payment, _OccurredAt, _Context) ->

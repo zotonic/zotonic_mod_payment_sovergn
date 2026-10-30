@@ -106,7 +106,7 @@ checkout_request(Payment, Context) ->
             Error
     end.
 
-checkout_result(#{ <<"id">> := PaymentId } = Payment, Request, Response, Context) ->
+checkout_result(#{ <<"id">> := PaymentId }, Request, Response, Context) ->
     case validate_checkout_response(Response, Request) of
         ok ->
             CheckoutSessionRef = maps:get(<<"checkoutSessionRef">>, Response),

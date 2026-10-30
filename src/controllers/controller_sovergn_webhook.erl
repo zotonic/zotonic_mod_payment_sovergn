@@ -3,6 +3,29 @@
 %% @end
 
 -module(controller_sovergn_webhook).
+-moduledoc(#{
+    zotonic_keywords => ["reference", "backend_developer", "controller", "api_and_integration"]
+}).
+-moduledoc("
+Handle Sovergn checkout callbacks.
+
+Accept POST events at `/sovergn/webhook`. Verify the HMAC over the original
+body, signature version, timestamp and event ID using `webhook_signing_secret`.
+Decoded events must match the signed event identity and an existing payment's
+correlation data. Payment and settlement events are normalized before local status
+updates. Delivery tests are acknowledged; processing failures return retryable 500
+responses. This endpoint does not import arbitrary unknown payments.
+
+Generate the endpoint through its dispatch rule, for example:
+
+```django
+{% url sovergn_payment_webhook %}
+```
+
+This provider-facing endpoint uses the verification described above rather than
+an administrator login.
+").
+
 
 -export([
     allowed_methods/1,

@@ -7,6 +7,32 @@
 %% @end
 
 -module(mod_payment_sovergn).
+-moduledoc(#{
+    zotonic_keywords => ["reference", "backend_developer", "module", "site_administrator", "configuration", "api_and_integration"]
+}).
+-moduledoc("
+Provide experimental Sovergn hosted checkout for anonymous payments.
+
+Enable this module together with `mod_payment` and select it with
+`#payment_request{preferred_psp_module = mod_payment_sovergn}`. Only anonymous
+correlation values are sent to Sovergn; payer names, email addresses and business
+references remain in Zotonic.
+
+Configure these site settings under **System → Payment configuration**, requiring
+`use.mod_admin_config`:
+
+- `environment`: `test` (default) or `live`.
+- `merchant_token`: merchant credential.
+- `oauth_client_id` and `oauth_client_secret`: OAuth credentials.
+- `webhook_signing_secret`: HMAC secret, separate from the OAuth client secret.
+
+All credentials must belong to the selected environment. The module logs missing
+or invalid configuration on initialization. Webhooks at `/sovergn/webhook` verify
+the signed body, timestamp and event identity, then match an existing payment
+before updating its status. Status polling remains restricted to known payments;
+this experimental adapter does not discover or import arbitrary account payments.
+").
+
 
 -mod_title("Payments using Sovergn").
 -mod_description("Payments using the Sovergn hosted checkout").
@@ -17,31 +43,36 @@
         key => environment,
         type => binary,
         default => <<"test">>,
-        description => "Sovergn environment: test or live; must match the OAuth client and webhook signing secret"
+        options => [<<"test">>, <<"live">>],
+        input => radio,
+        description => "Sovergn environment: test or live; must match the OAuth client and webhook signing secret."
     },
     #{
         key => merchant_token,
+        is_secret => true,
         type => binary,
         default => <<>>,
-        description => "Sovergn merchant token"
+        description => "Sovergn merchant token."
     },
     #{
         key => oauth_client_id,
         type => binary,
         default => <<>>,
-        description => "Sovergn OAuth 2.0 client id"
+        description => "Sovergn OAuth 2.0 client id."
     },
     #{
         key => oauth_client_secret,
+        is_secret => true,
         type => binary,
         default => <<>>,
-        description => "Sovergn OAuth client secret, shown only once when created or rotated"
+        description => "Sovergn OAuth client secret, shown only once when created or rotated."
     },
     #{
         key => webhook_signing_secret,
+        is_secret => true,
         type => binary,
         default => <<>>,
-        description => "Sovergn webhook HMAC signing secret; separate from the OAuth client secret"
+        description => "Sovergn webhook HMAC signing secret; separate from the OAuth client secret."
     }
 ]).
 

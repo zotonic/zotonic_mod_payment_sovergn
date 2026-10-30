@@ -98,3 +98,29 @@ validate_checkout_response_test() ->
         payment_sovergn_api:validate_checkout_response(
             maps:remove(<<"paymentPosture">>, Response),
             Request)).
+
+checkout_diagnostics_test() ->
+    Errors = payment_sovergn_api:checkout_response_errors(#{<<"providerBlind">> => false}, #{}),
+    ?assert(lists:member(#{field => <<"outcome">>, reason => missing,
+        expected => <<"checkout_ready">>, actual => missing}, Errors)),
+    ?assert(lists:member(#{field => <<"providerBlind">>, reason => unexpected_value,
+        expected => true, actual => false}, Errors)).
+
+checkout_diagnostics_redaction_test() ->
+    Secret = <<"secret-must-not-be-logged">>,
+    Request = #{<<"merchantToken">> => Secret, <<"merchantReference">> => Secret},
+    Response = #{
+        <<"merchantToken">> => <<"different-secret">>,
+        <<"merchantReference">> => <<"different-reference">>,
+        <<"checkoutUrl">> => <<"https://unexpected.example/", Secret/binary, "?token=", Secret/binary>>,
+        <<"access_token">> => Secret
+    },
+    Errors = payment_sovergn_api:checkout_response_errors(Response, Request),
+    Logged = iolist_to_binary(io_lib:format("~p", [Errors])),
+    ?assertEqual(nomatch, binary:match(Logged, Secret)),
+    ?assertEqual(nomatch, binary:match(Logged, <<"different-secret">>)),
+    ?assertEqual(nomatch, binary:match(Logged, <<"different-reference">>)),
+    [UrlError] = [E || #{field := <<"checkoutUrl">>} = E <- Errors],
+    ?assertMatch(#{actual := #{host := <<"unexpected.example">>,
+        expected_path_prefix := false}}, UrlError),
+    ?assertEqual([#{reason => expected_json_object}], payment_sovergn_api:checkout_response_errors([], Request)).

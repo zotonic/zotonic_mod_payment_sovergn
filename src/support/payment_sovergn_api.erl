@@ -4,6 +4,9 @@
 
 -module(payment_sovergn_api).
 
+%% Exported for HTTP contract tests and checkout diagnostic tests in test/.
+-export([api_json/6, checkout_response_errors/2]).
+
 -export([
     create/2,
     sync/2,
@@ -512,34 +515,3 @@ log_api_error(PaymentId, Operation, Reason, ValidationErrors, Context) ->
             <<"validation_errors">> => ValidationErrors
         },
         Context).
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-
-checkout_diagnostics_test() ->
-    Errors = checkout_response_errors(#{<<"providerBlind">> => false}, #{}),
-    ?assert(lists:member(#{field => <<"outcome">>, reason => missing,
-        expected => <<"checkout_ready">>, actual => missing}, Errors)),
-    ?assert(lists:member(#{field => <<"providerBlind">>, reason => unexpected_value,
-        expected => true, actual => false}, Errors)).
-
-checkout_diagnostics_redaction_test() ->
-    Secret = <<"secret-must-not-be-logged">>,
-    Request = #{<<"merchantToken">> => Secret, <<"merchantReference">> => Secret},
-    Response = #{
-        <<"merchantToken">> => <<"different-secret">>,
-        <<"merchantReference">> => <<"different-reference">>,
-        <<"checkoutUrl">> => <<"https://unexpected.example/", Secret/binary, "?token=", Secret/binary>>,
-        <<"access_token">> => Secret
-    },
-    Errors = checkout_response_errors(Response, Request),
-    Logged = iolist_to_binary(io_lib:format("~p", [Errors])),
-    ?assertEqual(nomatch, binary:match(Logged, Secret)),
-    ?assertEqual(nomatch, binary:match(Logged, <<"different-secret">>)),
-    ?assertEqual(nomatch, binary:match(Logged, <<"different-reference">>)),
-    [UrlError] = [E || #{field := <<"checkoutUrl">>} = E <- Errors],
-    ?assertMatch(#{actual := #{host := <<"unexpected.example">>,
-        expected_path_prefix := false}}, UrlError),
-    ?assertEqual([#{reason => expected_json_object}], checkout_response_errors([], Request)).
-
--endif.

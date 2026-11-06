@@ -1,0 +1,22 @@
+# Translations for mod_payment_sovergn.
+msgid ""
+msgstr ""
+"Project-Id-Version: mod_payment_sovergn\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-06 12:00+0100\n"
+"PO-Revision-Date: 2026-11-06 12:00+0100\n"
+"Last-Translator: Zotonic contributors\n"
+"Language-Team: ko\n"
+"Language: ko\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: zotonic_mod_payment_sovergn/priv/templates/_admin_payment_config_psp.tpl:1
+msgid "Experimental provider for anonymous payments. Discovery polling is not supported."
+msgstr "익명 결제를 위한 실험적 제공업체입니다. 결제 검색을 위한 주기적 조회는 지원되지 않습니다."
+
+#: zotonic_mod_payment_sovergn/priv/templates/_admin_payment_config_psp.tpl:1
+msgid "Sovergn"
+msgstr "Sovergn"

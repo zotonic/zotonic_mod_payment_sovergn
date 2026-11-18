@@ -9,11 +9,15 @@ verifies webhook HMAC signatures over the exact request body.
 
 Before enabling the module:
 
-1. The module currently targets the beta API at `https://beta.sovergnllc.com`
-   and accepts payer-entry URLs below
-   `https://checkout.sovergnllc.com/checkout/` and
-   `https://beta.sovergnllc.com/checkout/`. Replace `API_ORIGIN` when
-   Sovergn supplies the production API origin.
+1. Select **API endpoint** in the Sovergn section of **Payment configuration**
+   (**Donation configuration** on Womenswallet): `beta` uses
+   `https://beta.sovergnllc.com`; `production` uses `https://sovergnllc.com`.
+   Existing installations default to beta. This setting is separate from the
+   `test`/`live` payment environment. OAuth, checkout creation, payment status
+   and `mod_payment_sovergn:test/1` all use the selected API. OAuth tokens are
+   cached separately for each API origin. Hosted checkout URLs are accepted on
+   `checkout.sovergnllc.com`, `beta.sovergnllc.com` and `sovergnllc.com`, over
+   HTTPS and under `/checkout/`.
 2. Create an OAuth 2.0 client for the selected environment. Grant only
    `checkout_sessions:create` and `payment_status:read`. Save the client secret
    when it is displayed; it is shown only when the client is created or rotated,

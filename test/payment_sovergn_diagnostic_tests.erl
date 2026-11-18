@@ -23,7 +23,7 @@ diagnostic_test() ->
             ?assertEqual(<<"client_credentials">>, proplists:get_value(<<"grant_type">>, Params)),
             valid_reply(proplists:get_value(<<"scope">>, Params))
         end),
-        Expected = {ok, #{environment => <<"test">>, oauth => verified,
+        Expected = {ok, #{environment => <<"test">>, api_origin => <<"https://beta.sovergnllc.com">>, oauth => verified,
             scopes => [<<"checkout_sessions:create">>, <<"payment_status:read">>],
             merchant_token => present, webhook_signing_secret => present}},
         ?assertEqual(Expected, mod_payment_sovergn:test(#context{})),
@@ -73,7 +73,10 @@ configure(Overrides) ->
     Config = maps:merge(#{environment => <<"test">>, merchant_token => <<"merchant">>,
         oauth_client_id => <<"client">>, oauth_client_secret => <<"secret">>,
         webhook_signing_secret => <<"webhook-secret">>}, Overrides),
-    meck:expect(m_config, get_value, fun(mod_payment_sovergn, Key, #context{}) -> maps:get(Key, Config) end).
+    meck:expect(m_config, get_value, fun(mod_payment_sovergn, Key, #context{}) -> maps:get(Key, Config) end),
+    meck:expect(m_config, get_value, fun(mod_payment_sovergn, Key, Default, #context{}) ->
+        maps:get(Key, Config, Default)
+    end).
 
 valid_reply(Scope) ->
     json_reply(z_json:encode(#{<<"access_token">> => <<"secret-access-token">>,

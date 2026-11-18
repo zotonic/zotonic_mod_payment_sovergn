@@ -38,7 +38,8 @@ references remain in Zotonic.
 Configure these site settings under **System → Payment configuration**, requiring
 `use.mod_admin_config`:
 
-- `environment`: `test` (default) or `live`.
+- `api_endpoint`: `beta` (default) or `production` (`https://sovergnllc.com`).
+- `environment`: `test` (default) or `live`; independent of the API endpoint.
 - `merchant_token`: merchant credential.
 - `oauth_client_id` and `oauth_client_secret`: OAuth credentials.
 - `webhook_signing_secret`: HMAC secret, separate from the OAuth client secret.
@@ -63,6 +64,15 @@ webhook secrets are checked for presence only, not verified with Sovergn.
 -mod_author("Driebit").
 -mod_depends([ mod_payment ]).
 -mod_config([
+    #{
+        key => api_endpoint,
+        type => binary,
+        default => <<"beta">>,
+        options => [<<"beta">>, <<"production">>],
+        input => radio,
+        label => "API endpoint",
+        description => "Beta uses https://beta.sovergnllc.com; production uses https://sovergnllc.com. This is separate from the test/live payment environment."
+    },
     #{
         key => environment,
         type => binary,
@@ -120,6 +130,7 @@ init(Context) ->
             end
         end,
         [
+            {api_endpoint, <<"beta">>},
             {environment, <<"test">>},
             {merchant_token, <<>>},
             {oauth_client_id, <<>>},
@@ -137,9 +148,14 @@ configuration_errors(Context) ->
         [merchant_token, oauth_client_id, oauth_client_secret, webhook_signing_secret]),
     Environment = z_convert:to_binary(
         m_config:get_value(?MODULE, environment, Context)),
-    case lists:member(Environment, [<<"test">>, <<"live">>]) of
+    Invalid = case lists:member(Environment, [<<"test">>, <<"live">>]) of
         true -> Missing;
         false -> [environment | Missing]
+    end,
+    case m_config:get_value(?MODULE, api_endpoint, <<"beta">>, Context) of
+        <<"beta">> -> Invalid;
+        <<"production">> -> Invalid;
+        _ -> [api_endpoint | Invalid]
     end.
 
 log_config_status(Context) ->
@@ -169,6 +185,7 @@ test(Context) ->
                     {ok, #{
                         environment => z_convert:to_binary(
                             m_config:get_value(?MODULE, environment, Context)),
+                        api_origin => payment_sovergn_api:api_origin(Context),
                         oauth => verified,
                         scopes => Scopes,
                         merchant_token => present,

@@ -22,6 +22,7 @@
 -export([api_json/6, checkout_response_errors/2]).
 
 -export([
+    api_origin/1,
     test_oauth/1,
     create/2,
     sync/2,
@@ -35,13 +36,13 @@
 -include_lib("kernel/include/logger.hrl").
 -include_lib("zotonic_mod_payment/include/payment.hrl").
 
-%% The beta API serves its contract and endpoints from the same origin. Replace
-%% API_ORIGIN when Sovergn supplies the production API origin.
--define(API_ORIGIN, <<"https://beta.sovergnllc.com">>).
+-define(BETA_API_ORIGIN, <<"https://beta.sovergnllc.com">>).
+-define(PRODUCTION_API_ORIGIN, <<"https://sovergnllc.com">>).
 %% The beta API also returns hosted checkout URLs on its own origin.
 -define(CHECKOUT_ORIGINS, [
     <<"https://checkout.sovergnllc.com">>,
-    <<"https://beta.sovergnllc.com">>
+    ?BETA_API_ORIGIN,
+    ?PRODUCTION_API_ORIGIN
 ]).
 -define(CHECKOUT_PATH_PREFIX, <<"/checkout/">>).
 
@@ -50,6 +51,17 @@
 -define(SCOPE_PAYMENT_STATUS, <<"payment_status:read">>).
 -define(PAYMENT_POSTURE, <<"non_aop">>).
 -define(CHECKOUT_DECISION, <<"NON_AOP">>).
+
+%% @doc Select a fixed API origin, independently of the test/live payment mode.
+%% Unconfigured existing installations continue to use beta. Unknown settings
+%% fail closed instead of sending credentials to an unintended endpoint.
+-spec api_origin(Context) -> binary() when Context :: z:context().
+api_origin(Context) ->
+    case m_config:get_value(mod_payment_sovergn, api_endpoint, <<"beta">>, Context) of
+        <<"beta">> -> ?BETA_API_ORIGIN;
+        <<"production">> -> ?PRODUCTION_API_ORIGIN;
+        _ -> error(invalid_api_endpoint)
+    end.
 
 -spec create(integer(), z:context()) ->
     {ok, #payment_psp_handler{}} | {error, term()}.
@@ -356,10 +368,10 @@ first_defined([Value | _]) -> Value;
 first_defined([]) -> undefined.
 
 api_json(Method, Path, Payload, Scope, ExtraOptions, Context) ->
-    api_json(Method, Path, Payload, Scope, ExtraOptions, true, Context).
+    api_json(Method, Path, Payload, Scope, ExtraOptions, true, api_origin(Context), Context).
 
-api_json(Method, Path, Payload, Scope, ExtraOptions, RetryUnauthorized, Context) ->
-    case access_token(Scope, Context) of
+api_json(Method, Path, Payload, Scope, ExtraOptions, RetryUnauthorized, Origin, Context) ->
+    case access_token(Scope, Origin, Context) of
         {ok, AccessToken, CacheKey} ->
             Authorization = <<"Bearer ", AccessToken/binary>>,
             Options = [
@@ -368,7 +380,7 @@ api_json(Method, Path, Payload, Scope, ExtraOptions, RetryUnauthorized, Context)
                 {timeout, ?TIMEOUT}
                 | ExtraOptions
             ],
-            Url = <<?API_ORIGIN/binary, Path/binary>>,
+            Url = <<Origin/binary, Path/binary>>,
             Result = case Method of
                 get -> z_fetch:fetch_json(Url, Options, Context);
                 post -> z_fetch:fetch_json(post, Url, Payload, Options, Context)
@@ -376,7 +388,7 @@ api_json(Method, Path, Payload, Scope, ExtraOptions, RetryUnauthorized, Context)
             case Result of
                 {error, {401, _, _, _, _}} when RetryUnauthorized ->
                     ok = z_depcache:flush(CacheKey, Context),
-                    api_json(Method, Path, Payload, Scope, ExtraOptions, false, Context);
+                    api_json(Method, Path, Payload, Scope, ExtraOptions, false, Origin, Context);
                 _ ->
                     Result
             end;
@@ -384,17 +396,17 @@ api_json(Method, Path, Payload, Scope, ExtraOptions, RetryUnauthorized, Context)
             Error
     end.
 
-access_token(Scope, Context) ->
+access_token(Scope, Origin, Context) ->
     case oauth_credentials(Context) of
         {ok, ClientId, ClientSecret} ->
             CredentialVersion = crypto:hash(sha256, ClientSecret),
-            CacheKey = {?MODULE, access_token, Scope, ClientId, CredentialVersion},
+            CacheKey = {?MODULE, access_token, Origin, Scope, ClientId, CredentialVersion},
             case z_depcache:get(CacheKey, Context) of
                 {ok, Token} when is_binary(Token), Token =/= <<>> ->
                     {ok, Token, CacheKey};
                 _ ->
                     case fetch_access_token(
-                        CacheKey, Scope, ClientId, ClientSecret, Context)
+                        CacheKey, Scope, ClientId, ClientSecret, Origin, Context)
                     of
                         {ok, Token} -> {ok, Token, CacheKey};
                         {error, _} = Error -> Error
@@ -404,7 +416,7 @@ access_token(Scope, Context) ->
             Error
     end.
 
-fetch_access_token(CacheKey, Scope, ClientId, ClientSecret, Context) ->
+fetch_access_token(CacheKey, Scope, ClientId, ClientSecret, Origin, Context) ->
     Basic = base64:encode(<<ClientId/binary, $:, ClientSecret/binary>>),
     Authorization = <<"Basic ", Basic/binary>>,
     Payload = #{
@@ -417,7 +429,7 @@ fetch_access_token(CacheKey, Scope, ClientId, ClientSecret, Context) ->
         {content_type, <<"application/x-www-form-urlencoded">>},
         {timeout, ?TIMEOUT}
     ],
-    Url = <<?API_ORIGIN/binary, "/oauth/token">>,
+    Url = <<Origin/binary, "/oauth/token">>,
     case z_fetch:fetch_json(post, Url, Payload, Options, Context) of
         {ok, #{
             <<"access_token">> := Token,
@@ -443,17 +455,17 @@ test_oauth(Context) ->
     case oauth_credentials(Context) of
         {ok, ClientId, ClientSecret} ->
             Scopes = [?SCOPE_CHECKOUT_CREATE, ?SCOPE_PAYMENT_STATUS],
-            case test_oauth_scopes(Scopes, ClientId, ClientSecret) of
+            case test_oauth_scopes(Scopes, ClientId, ClientSecret, api_origin(Context)) of
                 ok -> {ok, Scopes};
                 {error, _} = Error -> Error
             end;
         {error, _} -> {error, oauth_credentials}
     end.
 
-test_oauth_scopes([], _ClientId, _ClientSecret) -> ok;
-test_oauth_scopes([Scope | Rest], ClientId, ClientSecret) ->
+test_oauth_scopes([], _ClientId, _ClientSecret, _Origin) -> ok;
+test_oauth_scopes([Scope | Rest], ClientId, ClientSecret, Origin) ->
     Result = try
-        Url = <<?API_ORIGIN/binary, "/oauth/token">>,
+        Url = <<Origin/binary, "/oauth/token">>,
         #{host := Host} = uri_string:parse(Url),
         Basic = base64:encode(<<ClientId/binary, $:, ClientSecret/binary>>),
         Headers = [{"authorization", binary_to_list(<<"Basic ", Basic/binary>>)},
@@ -469,7 +481,7 @@ test_oauth_scopes([Scope | Rest], ClientId, ClientSecret) ->
         _:_ -> {error, request_failed}
     end,
     case Result of
-        ok -> test_oauth_scopes(Rest, ClientId, ClientSecret);
+        ok -> test_oauth_scopes(Rest, ClientId, ClientSecret, Origin);
         {error, Reason} -> {error, {oauth, Scope, Reason}}
     end.
 

@@ -48,6 +48,13 @@ or invalid configuration on initialization. Webhooks at `/sovergn/webhook` verif
 the signed body, timestamp and event identity, then match an existing payment
 before updating its status. Status polling remains restricted to known payments;
 this experimental adapter does not discover or import arbitrary account payments.
+
+From the Erlang shell, call `mod_payment_sovergn:test(z:c(Site))` to check
+configuration and verify fresh OAuth credentials for both required scopes.
+No payment or checkout is created. Success returns `{ok, Summary}`; failures
+return `{error, {configuration, Keys}}` or `{error, {oauth, Scope, Reason}}`.
+The summary contains no credentials or access tokens. Merchant tokens and
+webhook secrets are checked for presence only, not verified with Sovergn.
 ").
 
 
@@ -66,7 +73,7 @@ this experimental adapter does not discover or import arbitrary account payments
     },
     #{
         key => merchant_token,
-        is_secret => true,
+        is_secret => false,
         type => binary,
         default => <<>>,
         description => "Sovergn merchant token."
@@ -95,6 +102,7 @@ this experimental adapter does not discover or import arbitrary account payments
 
 -export([
     init/1,
+    test/1,
     observe_payment_psp_request/2,
     observe_payment_psp_view_url/2,
     observe_payment_psp_status_sync/2
@@ -120,7 +128,7 @@ init(Context) ->
         ]),
     log_config_status(Context).
 
-log_config_status(Context) ->
+configuration_errors(Context) ->
     Missing = lists:filter(
         fun(Key) ->
             z_string:trim(z_convert:to_binary(
@@ -129,14 +137,16 @@ log_config_status(Context) ->
         [merchant_token, oauth_client_id, oauth_client_secret, webhook_signing_secret]),
     Environment = z_convert:to_binary(
         m_config:get_value(?MODULE, environment, Context)),
-    Invalid = case lists:member(Environment, [<<"test">>, <<"live">>]) of
+    case lists:member(Environment, [<<"test">>, <<"live">>]) of
         true -> Missing;
         false -> [environment | Missing]
-    end,
-    case Invalid of
+    end.
+
+log_config_status(Context) ->
+    case configuration_errors(Context) of
         [] ->
             ok;
-        _ ->
+        Invalid ->
             ?LOG_ERROR(#{
                 in => zotonic_mod_payment_sovergn,
                 text => <<"Sovergn payment configuration is incomplete">>,
@@ -145,6 +155,29 @@ log_config_status(Context) ->
                 missing_or_invalid => Invalid
             }),
             ok
+    end.
+
+%% @doc Shell diagnostic. Verify fresh OAuth grants without creating a payment.
+%% Presence checks cannot authenticate the merchant token or webhook secret.
+-spec test(Context) -> {ok, map()} | {error, term()} when
+    Context :: z:context().
+test(Context) ->
+    case configuration_errors(Context) of
+        [] ->
+            case payment_sovergn_api:test_oauth(Context) of
+                {ok, Scopes} ->
+                    {ok, #{
+                        environment => z_convert:to_binary(
+                            m_config:get_value(?MODULE, environment, Context)),
+                        oauth => verified,
+                        scopes => Scopes,
+                        merchant_token => present,
+                        webhook_signing_secret => present
+                    }};
+                {error, _} = Error -> Error
+            end;
+        Keys ->
+            {error, {configuration, Keys}}
     end.
 
 %% @doc Handle non-recurring EUR and USD payments when no other PSP was selected.

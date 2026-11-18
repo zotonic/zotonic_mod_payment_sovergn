@@ -1,6 +1,7 @@
 %% @doc Shell diagnostics must not create payments or disclose provider responses.
 -module(payment_sovergn_diagnostic_tests).
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("zotonic_core/include/zotonic.hrl").
 
 diagnostic_test() ->
     meck:new([m_config, httpc, tls_certificate_check], [passthrough, no_link]),
@@ -25,22 +26,22 @@ diagnostic_test() ->
         Expected = {ok, #{environment => <<"test">>, oauth => verified,
             scopes => [<<"checkout_sessions:create">>, <<"payment_status:read">>],
             merchant_token => present, webhook_signing_secret => present}},
-        ?assertEqual(Expected, mod_payment_sovergn:test(context)),
-        ?assertEqual(Expected, mod_payment_sovergn:test(context)),
+        ?assertEqual(Expected, mod_payment_sovergn:test(#context{})),
+        ?assertEqual(Expected, mod_payment_sovergn:test(#context{})),
         %% Every invocation verifies both grants afresh; no token cache is used.
         ?assertEqual(4, meck:num_calls(httpc, request, '_')),
         lists:foreach(fun(Key) ->
             configure(#{Key => <<" \t ">>}),
-            ?assertEqual({error, {configuration, [Key]}}, mod_payment_sovergn:test(context))
+            ?assertEqual({error, {configuration, [Key]}}, mod_payment_sovergn:test(#context{}))
         end, [merchant_token, oauth_client_id, oauth_client_secret, webhook_signing_secret]),
         configure(#{environment => <<"invalid">>}),
-        ?assertEqual({error, {configuration, [environment]}}, mod_payment_sovergn:test(context)),
+        ?assertEqual({error, {configuration, [environment]}}, mod_payment_sovergn:test(#context{})),
         ?assertEqual(4, meck:num_calls(httpc, request, '_')),
         configure(#{}),
         lists:foreach(fun({Reply, Reason}) ->
             meck:expect(httpc, request, fun(_, _, _, _) -> Reply end),
             ?assertEqual({error, {oauth, <<"checkout_sessions:create">>, Reason}},
-                mod_payment_sovergn:test(context))
+                mod_payment_sovergn:test(#context{}))
         end, [
             {{ok, {{"HTTP/1.1", Code, "secret"}, [{"secret", "token"}], <<"secret token">>}},
                 {http_status, Code}} || Code <- [301, 302, 401, 403, 429, 500]
@@ -55,7 +56,7 @@ diagnostic_test() ->
         ]),
         meck:expect(httpc, request, fun(_, _, _, _) -> error({secret, <<"token">>}) end),
         ?assertEqual({error, {oauth, <<"checkout_sessions:create">>, request_failed}},
-            mod_payment_sovergn:test(context)),
+            mod_payment_sovergn:test(#context{})),
         meck:expect(httpc, request, fun(_, {_, _, _, Body}, _, _) ->
             case proplists:get_value(<<"scope">>, cow_qs:parse_qs(Body)) of
                 <<"checkout_sessions:create">> = Scope -> valid_reply(Scope);
@@ -63,7 +64,7 @@ diagnostic_test() ->
             end
         end),
         ?assertEqual({error, {oauth, <<"payment_status:read">>, {http_status, 403}}},
-            mod_payment_sovergn:test(context))
+            mod_payment_sovergn:test(#context{}))
     after
         meck:unload([m_config, httpc, tls_certificate_check])
     end.
@@ -72,7 +73,7 @@ configure(Overrides) ->
     Config = maps:merge(#{environment => <<"test">>, merchant_token => <<"merchant">>,
         oauth_client_id => <<"client">>, oauth_client_secret => <<"secret">>,
         webhook_signing_secret => <<"webhook-secret">>}, Overrides),
-    meck:expect(m_config, get_value, fun(mod_payment_sovergn, Key, context) -> maps:get(Key, Config) end).
+    meck:expect(m_config, get_value, fun(mod_payment_sovergn, Key, #context{}) -> maps:get(Key, Config) end).
 
 valid_reply(Scope) ->
     json_reply(z_json:encode(#{<<"access_token">> => <<"secret-access-token">>,

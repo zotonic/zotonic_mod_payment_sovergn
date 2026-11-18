@@ -22,6 +22,7 @@
 -export([api_json/6, checkout_response_errors/2]).
 
 -export([
+    test_oauth/1,
     create/2,
     sync/2,
 
@@ -432,6 +433,59 @@ fetch_access_token(CacheKey, Scope, ClientId, ClientSecret, Context) ->
         {error, _} = Error ->
             Error
     end.
+
+%% @doc Verify both OAuth grants without using or changing cached access tokens.
+%% Use httpc directly: z_fetch can log a malformed JSON response body, which
+%% could contain credentials. Never return response bodies, headers or exceptions.
+-spec test_oauth(Context) -> {ok, [binary()]} | {error, term()} when
+    Context :: z:context().
+test_oauth(Context) ->
+    case oauth_credentials(Context) of
+        {ok, ClientId, ClientSecret} ->
+            Scopes = [?SCOPE_CHECKOUT_CREATE, ?SCOPE_PAYMENT_STATUS],
+            case test_oauth_scopes(Scopes, ClientId, ClientSecret) of
+                ok -> {ok, Scopes};
+                {error, _} = Error -> Error
+            end;
+        {error, _} -> {error, oauth_credentials}
+    end.
+
+test_oauth_scopes([], _ClientId, _ClientSecret) -> ok;
+test_oauth_scopes([Scope | Rest], ClientId, ClientSecret) ->
+    Result = try
+        Url = <<?API_ORIGIN/binary, "/oauth/token">>,
+        #{host := Host} = uri_string:parse(Url),
+        Basic = base64:encode(<<ClientId/binary, $:, ClientSecret/binary>>),
+        Headers = [{"authorization", binary_to_list(<<"Basic ", Basic/binary>>)},
+                   {"accept", "application/json"}],
+        Body = cow_qs:qs([{<<"grant_type">>, <<"client_credentials">>}, {<<"scope">>, Scope}]),
+        Options = [{autoredirect, false}, {timeout, ?TIMEOUT},
+                   {connect_timeout, ?TIMEOUT}, {ssl, tls_certificate_check:options(Host)}],
+        Reply = httpc:request(post,
+            {binary_to_list(Url), Headers, "application/x-www-form-urlencoded", Body},
+            Options, [{body_format, binary}]),
+        test_oauth_reply(Reply, Scope)
+    catch
+        _:_ -> {error, request_failed}
+    end,
+    case Result of
+        ok -> test_oauth_scopes(Rest, ClientId, ClientSecret);
+        {error, Reason} -> {error, {oauth, Scope, Reason}}
+    end.
+
+test_oauth_reply({ok, {{_, 200, _}, _, Body}}, Scope) ->
+    try z_json:decode(Body) of
+        #{<<"access_token">> := Token, <<"token_type">> := <<"Bearer">>,
+          <<"expires_in">> := ExpiresIn, <<"scope">> := Scope}
+            when is_binary(Token), Token =/= <<>>, is_integer(ExpiresIn), ExpiresIn > 0 -> ok;
+        _ -> {error, invalid_response}
+    catch
+        _:_ -> {error, invalid_response}
+    end;
+test_oauth_reply({ok, {{_, Status, _}, _, _}}, _Scope) when is_integer(Status) ->
+    {error, {http_status, Status}};
+test_oauth_reply({error, timeout}, _Scope) -> {error, timeout};
+test_oauth_reply(_, _Scope) -> {error, request_failed}.
 
 oauth_credentials(Context) ->
     ClientId = config_binary(oauth_client_id, Context),

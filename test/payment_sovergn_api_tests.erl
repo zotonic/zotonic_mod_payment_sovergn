@@ -87,6 +87,8 @@ validate_checkout_response_test() ->
     ?assertEqual(ok, payment_sovergn_api:validate_checkout_response(
         Response#{<<"checkoutUrl">> => <<"https://beta.sovergnllc.com/checkout/chk_test">>},
         Request)),
+    ?assertEqual(ok, payment_sovergn_api:validate_checkout_response(
+        Response#{<<"checkoutUrl">> => <<"https://sovergnllc.com/checkout/chk_test">>}, Request)),
     lists:foreach(
         fun(Url) ->
             ?assertEqual({error, invalid_checkout_response},
@@ -95,6 +97,9 @@ validate_checkout_response_test() ->
         end,
         [
             <<"http://beta.sovergnllc.com/checkout/chk_test">>,
+            <<"https://sovergnllc.com.evil.example/checkout/chk_test">>,
+            <<"https://sovergnllc.com@evil.example/checkout/chk_test">>,
+            <<"https://sovergnllc.com:8443/checkout/chk_test">>,
             <<"https://beta.sovergnllc.com.evil.example/checkout/chk_test">>,
             <<"https://beta.sovergnllc.com@evil.example/checkout/chk_test">>,
             <<"https://beta.sovergnllc.com:8443/checkout/chk_test">>,
